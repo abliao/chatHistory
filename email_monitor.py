@@ -1,4 +1,5 @@
 import os
+import re
 import imaplib
 import email
 import time
@@ -8,6 +9,7 @@ from email.mime.text import MIMEText
 from email.header import decode_header
 from dotenv import load_dotenv
 from openai import OpenAI
+import prompt
 
 # 加载环境变量
 load_dotenv()
@@ -35,6 +37,15 @@ def decode_email_header(header):
         for text, charset in decoded_header
     ])
 
+def decode_email_content(text):
+    """解读邮件内容"""
+    pattern = r"(.*?)—————.*?—————\s*(.*)"
+    match = re.search(pattern, text, re.S)
+
+    # 提取分割结果
+    before_time = match.group(1).strip() if match else "未找到分隔线前的内容"
+    after_time = match.group(2).strip() if match else "未找到分隔线后的内容"
+    return before_time, after_time
 def get_email_content(msg):
     """获取邮件内容"""
     if msg.is_multipart():
@@ -44,13 +55,16 @@ def get_email_content(msg):
     else:
         return msg.get_payload(decode=True).decode()
 
-def generate_response(content):
-    """使用OpenAI生成回复"""
+def generate_response(subject,content):
+    """生成回复"""
+    body,history = decode_email_content(content)
+    content = f"主题: {subject}\n聊天消息：\n{history}"
+    print(f"content: {content}")
     try:
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "你是一个专业的邮件助手，请对收到的邮件内容进行回复。"},
+                {"role": "system", "content": f"{prompt.reply_prompt}"},
                 {"role": "user", "content": content}
             ]
         )
@@ -79,10 +93,7 @@ def check_email():
     """检查邮件"""
     try:
         # 连接IMAP服务器
-        print('start')
         mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        print(EMAIL)
-        print(PASSWORD)
         mail.login(EMAIL, PASSWORD)
         mail.select('INBOX')
 
@@ -99,8 +110,6 @@ def check_email():
             # 获取发件人和主题
             from_address = msg['from']
             subject = decode_email_header(msg['subject'])
-            print(from_address)
-            print(subject)
             
             # 检查是否符合过滤条件
             if SENDER_FILTER and SENDER_FILTER not in from_address:
@@ -115,25 +124,24 @@ def check_email():
                 continue
                 
             print(f"收到符合条件的邮件:\n发件人: {from_address}\n主题: {subject}")
-            print(content)
+            print('内容\n',content)
             # 生成回复
-            response = generate_response(content)
+            response = generate_response(subject,content)
             if response:
                 # 发送回复
                 sender_email = email.utils.parseaddr(from_address)[1]
                 send_email(sender_email, subject, response)
-            # 将邮件标记为已读
-            mail.store(num, '+FLAGS', '\\Seen')
+                # 将邮件标记为已读
+                mail.store(num, '+FLAGS', '\\Seen')
         mail.logout()
     except Exception as e:
         print(f"处理邮件时出错: {e}")
 
 def main():
     print("邮件监听程序已启动...")
-    check_email()
-    # while True:
-    #     check_email()
-    #     time.sleep(1)  # 每分钟检查一次
+    while True:
+        check_email()
+        time.sleep(1) 
 
 if __name__ == "__main__":
     main() 
